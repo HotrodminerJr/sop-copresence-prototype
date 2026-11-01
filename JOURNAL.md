@@ -112,3 +112,47 @@ Next session: Phase 2 is done. Start Phase 3 — port the sync engine to
 React Native (Expo) using react-native-webrtc. Expected to shake out
 real differences at `playbackRate` integration time; the checkpoint model
 chosen in D14 is specifically there to make that one line.
+
+## Sun 2026-10-18 — Zeroth step: HTML5 <video> hookup
+
+- Added a real <video> element to both tabs, muted + paused, preload=auto.
+- Leader-only Play button. Click sends {type:'play'} over the DataChannel;
+  follower starts its own video on receipt. Both peers' models reset to
+  checkpointPos=0 at that moment so they start from the same t=0.
+- Follower's applyCorrection() now propagates to the video:
+    snap  → video.currentTime = expected/1000; video.playbackRate = 1.0
+    ease  → video.playbackRate = currentRate (0.98 or 1.02)
+    exit  → video.playbackRate = 1.0
+- Inject button also seeks the video forward so model AND video are
+  genuinely ahead (otherwise snap would un-sync them).
+- Video source: downloaded /sample.mp4 into public/ because the browser
+  pane sandbox blocks external MP4 fetches. Gitignored.
+- Verified end-to-end on two tabs: snap on +2000ms, ease on +200ms over
+  ~9 seconds with video visibly slowing to 0.98×.
+
+Discovered: on the follower, immediately after a snap, video.currentTime
+lags its own model by ~660ms while the HTML5 decoder re-seeks. The sync
+protocol thinks it is caught up; the user still sees a frozen frame for
+half a second. This is exactly the open question flagged in Theory §9
+about rate/seek control interactions with the codec, now with a measured
+number. Does not invalidate the sync engine — it is a measurement that
+belongs at the video layer, so Phase 3 and the eval phase will care.
+
+## Sun 2026-11-01 — Alpha: separate video drift from protocol drift
+
+- CSV grew two columns (now 11 total):
+    video_current_time_ms   — follower's video.currentTime * 1000
+    video_vs_model_gap_ms   — local_position_ms - video_current_time_ms
+      (positive = video is behind model, i.e. codec lagging the sync)
+- Added live "Video lag: Xms" UI readout updated every 100ms so the
+  codec seek recovery is visible without waiting for the next broadcast.
+- Rationale: drift_ms records what the SYNC PROTOCOL achieved; the new
+  columns record what the USER actually sees. The eval phase needs both.
+- Smoke-tested the serialization (browser-pane WebRTC was flaky this
+  session so full E2E deferred); applyCorrection + CSV write produce
+  the expected row shape across none/ease/snap.
+- Everything from 2.1 through here committed as f7f8e5f on main; first
+  commit in this repo since Sep 23.
+
+Next session: Phase 3 proper — RN port + LiveKit integration + PiP +
+audio ducking. Highest-risk phase per the implementation plan.
