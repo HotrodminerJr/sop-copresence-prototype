@@ -22,3 +22,5 @@ alongside a live WebRTC call, resilient to mobile network heterogeneity.
 - Evaluation: drift benchmarks under simulated network degradation
 
 ## Run locally
+npm install
+node server.js
