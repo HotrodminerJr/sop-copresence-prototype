@@ -156,3 +156,85 @@ belongs at the video layer, so Phase 3 and the eval phase will care.
 
 Next session: Phase 3 proper — RN port + LiveKit integration + PiP +
 audio ducking. Highest-risk phase per the implementation plan.
+
+## Fri 2026-11-06 — Phase 3 Step 1+2: LiveKit live call + audio ducking
+
+Started with Path B from the sequencing question: add LiveKit in the
+browser first, prove the two-channel architecture, port to RN later.
+Rationale: the real engineering risk is "two WebRTC connections on
+one device competing for CPU/bandwidth" — a resource question, not a
+platform question. Browser proves or disproves it in minutes where
+RN takes a native rebuild per change, and react-native-webrtc's API
+is explicitly modelled on browser WebRTC so the port is mechanical.
+
+LiveKit infrastructure: picked Cloud over self-hosted for dev.
+D7 commits to self-hosted for evaluation-phase comparability, but
+for dev the Cloud free tier gets us going in 2 minutes and the
+switch to self-hosted later is one URL in the client config. Project
+is sop-prototype-p9taetqa.livekit.cloud.
+
+Step 1 (LiveKit integration):
+- Added livekit-server-sdk + dotenv; 3 env vars in .env (gitignored)
+- /livekit/config returns the public WSS URL only (no secrets)
+- /livekit/token mints HS256 JWTs server-side for the requested room
+  and identity; API_SECRET never leaves the server
+- Added <script src="…livekit-client.umd.js"> to index.html; global
+  is LivekitClient. Took a false start on .umd.min.js (v2 doesn't
+  ship that bundle) — unpkg returned 404 which showed up as
+  "LivekitClient is not defined" at join time. One-line fix.
+- Both peers can Join Call independently; each becomes a participant
+  in the sop-sync-room room, publishes camera+mic, subscribes to
+  remote tracks which get attached to a dedicated container
+- Verified Nov 1: "Remote participants: 1" on both, each tab shows
+  the OTHER peer's camera feed
+
+Step 2 (audio ducking):
+- Hooks LiveKit's RoomEvent.ActiveSpeakersChanged → video.volume
+- Ducks to 0.2x when any REMOTE participant is in the speakers list
+- 500ms release tail so mid-sentence breaths don't cause volume
+  pulsing; overlapping speech during release cancels the release
+- Cleanup on room disconnect so volume doesn't get stuck quiet
+- Design decisions D16 (ducked level 0.2x) and D17 (asymmetric
+  speaker-detection + 500ms release) to be written up — same model
+  as D14/D15, drafts to paste into the shared Decisions Log
+
+Server-side fix along the way (caught Nov 1 testing):
+- Role was `clients.length === 0 ? 'A' : 'B'`. When A disconnected
+  and reconnected with B still present, the new tab also became B.
+  Two Bs → leader-position broadcast loop (role-gated to A) never
+  fires → CSV logging freezes after the first ~4 seconds. The Oct
+  18 session's CSV dropouts had this root cause.
+- Fix: assign whichever role is MISSING from clients[], not based
+  on count. Verified: reconnecting A gets A back, loop stays alive.
+
+Verification Nov 6 (full cycle):
+- Both tabs Role A / B correctly
+- DataChannel sync: Bursts 10/10 with RTT [0,3]ms, θ hovers ±0.5ms
+- Snap: 4 consecutive +2000ms injects → one SNAP each, drift back
+  to ~1ms on next broadcast
+- LiveKit: both cameras visible, DUCK: remote speaking / DUCK:
+  release cycling on both tabs while the sync layer runs underneath
+- No contention between channels — snaps and ducking can happen
+  simultaneously without affecting each other
+
+CSV baseline Nov 6 (sop-drift-2026-11-06T14-09-48.csv, 121 rows):
+- 31s of sync-alone (no video): drift stable at -2.5 to -2.0 ms,
+  deep in the dead zone, no correction triggered
+- 30s of sync + video (after Play): drift stable at -2 ms,
+  video_vs_model_gap_ms CONSISTENTLY 122-124 ms (range 122.6 to
+  123.7 across 60 samples). The HTML5 video pipeline has a stable
+  ~123ms rendering delay — a constant, not jitter. Compensatable
+  if ever needed but almost certainly below the perceptual
+  threshold (30-50ms is the co-watching perception floor and this
+  is a CONSTANT offset, not a changing drift).
+
+Committed as 59172ae: Phase 3 Step 1+2 bundle. First commit on
+this repo in 5 days; closes the five-week-uncommitted window
+that's been open since Sep 23.
+
+Next session: close Phase 3 with the small remaining items —
+Picture-in-Picture layout (remote camera overlay on main video
+instead of side-by-side) and a 5+ minute stress test with both
+channels active to measure concurrent-resource behavior. Then
+move to Phase 3 Step 3 — React Native port with Expo +
+react-native-webrtc + LiveKit's RN SDK.
