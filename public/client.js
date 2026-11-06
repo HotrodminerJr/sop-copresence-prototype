@@ -23,6 +23,9 @@ const modeText     = document.getElementById('modeText');     // Current correct
 const videoLagText = document.getElementById('videoLagText'); // model − video.currentTime (α instrumentation)
 const video        = document.getElementById('video');        // Real <video> element (zeroth step)
 const playBtn      = document.getElementById('playBtn');      // Leader-only play button (zeroth step)
+const joinCallBtn  = document.getElementById('joinCallBtn');  // LiveKit join (Phase 3)
+const remoteContainer = document.getElementById('remoteContainer'); // Holds remote <video>/<audio> (Phase 3)
+const remoteCountText = document.getElementById('remoteCountText'); // Count readout (Phase 3)
 const sendBtn      = document.getElementById('sendBtn');
 const logDiv       = document.getElementById('log');
 
@@ -532,6 +535,9 @@ function setupDataChannel() {
         if (role === 'A') {
             playBtn.disabled = false;
         }
+
+        // Phase 3: both peers can join the LiveKit call independently.
+        joinCallBtn.disabled = false;
         log(`Position ticker started at t=0`);
 
         if (role === 'A') {
@@ -721,6 +727,155 @@ injectBtn.onclick = () => {
         log(`Injected +${INJECT_MS}ms drift — local position jumped forward`);
     }
 };
+
+// ═══════════════════════════════════════════════════════════
+// Audio ducking (Phase 3 — Path B, step 2)
+// ═══════════════════════════════════════════════════════════
+// When the OTHER peer speaks (detected via LiveKit's audio-level
+// analysis), we lower the shared video's volume so the speaker can
+// be heard clearly. Volume restores after a short release tail so
+// mid-sentence breaths/pauses don't cause volume pulsing.
+//
+// Approach:
+//   - LiveKit emits ActiveSpeakersChanged whenever the set of
+//     "currently speaking" participants changes.
+//   - We ignore our local participant (we don't duck our own voice;
+//     we're not even playing it back locally).
+//   - If any REMOTE is in the speakers list → start ducking.
+//   - When we stop seeing any remote speaker, wait DUCK_RELEASE_MS
+//     before restoring volume. If a new speech burst arrives
+//     during that window, cancel the release and keep ducking.
+// ═══════════════════════════════════════════════════════════
+const DUCK_VOLUME       = 0.2;   // volume while someone is speaking
+const DUCK_FULL_VOLUME  = 1.0;   // restored volume
+const DUCK_RELEASE_MS   = 500;   // tail after speakers go quiet
+
+let duckReleaseTimer = null;
+let currentlyDucked  = false;
+
+function applyDucking(remoteSpeaking) {
+    if (remoteSpeaking) {
+        // Cancel any pending release — speech restarted.
+        if (duckReleaseTimer) {
+            clearTimeout(duckReleaseTimer);
+            duckReleaseTimer = null;
+        }
+        if (!currentlyDucked) {
+            video.volume = DUCK_VOLUME;
+            currentlyDucked = true;
+            log(`DUCK: remote speaking → video.volume ${DUCK_VOLUME}`);
+        }
+    } else {
+        // No remote speakers right now — schedule a release after the tail,
+        // unless a release is already scheduled.
+        if (currentlyDucked && !duckReleaseTimer) {
+            duckReleaseTimer = setTimeout(() => {
+                video.volume = DUCK_FULL_VOLUME;
+                currentlyDucked = false;
+                duckReleaseTimer = null;
+                log(`DUCK: release → video.volume ${DUCK_FULL_VOLUME}`);
+            }, DUCK_RELEASE_MS);
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// LiveKit live call integration (Phase 3 — Path B, step 1)
+// ═══════════════════════════════════════════════════════════
+// Both peers can join a shared LiveKit room with their camera and
+// microphone. The sync DataChannel keeps running in parallel — this
+// is the "two-channel architecture" from D8, now actually two channels.
+//
+// Flow:
+//   1. Fetch a signed JWT from our Node server (/livekit/token).
+//      The API secret stays server-side; we only ever see the token.
+//   2. Create a LiveKit Room, wire up event handlers.
+//   3. Connect to the Cloud SFU with the token.
+//   4. Enable camera + mic — LiveKit prompts the browser for permission.
+//   5. Remote participants' tracks arrive via TrackSubscribed; attach
+//      the DOM element LiveKit builds to the remote container.
+//
+// We deliberately DO NOT attach local tracks to the DOM: on a single-
+// machine two-tab test, we don't want to see our own camera twice.
+// ═══════════════════════════════════════════════════════════
+let livekitRoom = null;
+
+async function joinLiveKitCall() {
+    try {
+        joinCallBtn.disabled = true;
+        joinCallBtn.textContent = '📞 Joining…';
+        log('Fetching LiveKit token…');
+
+        const identity = `peer-${role}-${Date.now()}`;
+        const res = await fetch(`/livekit/token?room=sop-sync-room&identity=${encodeURIComponent(identity)}`);
+        if (!res.ok) throw new Error(`token fetch ${res.status}`);
+        const { token, url } = await res.json();
+
+        log(`Connecting to LiveKit at ${url}…`);
+        const { Room, RoomEvent } = LivekitClient;
+        livekitRoom = new Room();
+
+        livekitRoom.on(RoomEvent.ParticipantConnected, (p) => {
+            log(`LiveKit: ${p.identity} joined`);
+            updateRemoteCount();
+        });
+        livekitRoom.on(RoomEvent.ParticipantDisconnected, (p) => {
+            log(`LiveKit: ${p.identity} left`);
+            updateRemoteCount();
+        });
+        livekitRoom.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+            log(`LiveKit: subscribed to ${track.kind} from ${participant.identity}`);
+            const el = track.attach();
+            el.dataset.identity = participant.identity;
+            el.style.width = '100%';
+            el.style.marginTop = '4px';
+            remoteContainer.appendChild(el);
+        });
+        livekitRoom.on(RoomEvent.TrackUnsubscribed, (track) => {
+            track.detach().forEach(el => el.remove());
+        });
+        livekitRoom.on(RoomEvent.Disconnected, () => {
+            log('LiveKit: room disconnected');
+            joinCallBtn.disabled = false;
+            joinCallBtn.textContent = '📞 Join call (camera + mic)';
+            livekitRoom = null;
+            // If we were ducking when the room dropped, restore volume
+            // so the user isn't left with permanently quiet media.
+            if (currentlyDucked) {
+                video.volume = DUCK_FULL_VOLUME;
+                currentlyDucked = false;
+            }
+            if (duckReleaseTimer) { clearTimeout(duckReleaseTimer); duckReleaseTimer = null; }
+            updateRemoteCount();
+        });
+        livekitRoom.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+            // speakers is an array of Participant objects currently speaking.
+            // We care only about REMOTE speakers — don't duck for ourselves.
+            const localIdentity = livekitRoom.localParticipant.identity;
+            const remoteSpeaking = speakers.some(p => p.identity !== localIdentity);
+            applyDucking(remoteSpeaking);
+        });
+
+        await livekitRoom.connect(url, token);
+        log(`LiveKit connected as ${identity}`);
+
+        await livekitRoom.localParticipant.enableCameraAndMicrophone();
+        log('LiveKit: camera + mic published');
+
+        joinCallBtn.textContent = '📞 In call';
+        updateRemoteCount();
+    } catch (err) {
+        log(`LiveKit error: ${err.message}`);
+        joinCallBtn.disabled = false;
+        joinCallBtn.textContent = '📞 Join call (camera + mic)';
+    }
+}
+
+function updateRemoteCount() {
+    remoteCountText.textContent = livekitRoom ? livekitRoom.remoteParticipants.size : 0;
+}
+
+joinCallBtn.onclick = joinLiveKitCall;
 
 // Zeroth step: leader-only Play button. Starts leader's video, aligns the
 // model to position 0, and tells the follower to start too.

@@ -12,7 +12,9 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "dotenv": "^18.0.9",
     "express": "^5.2.1",
+    "livekit-server-sdk": "^2.19.2",
     "ws": "^8.21.3"
   }
 }

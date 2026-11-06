@@ -30,16 +30,22 @@
     </div>
 
     <button id="playBtn" disabled>▶ Play (leader only)</button>
+    <button id="joinCallBtn" disabled>📞 Join call (camera + mic)</button>
     <button id="injectBtn" disabled>Inject +2000 ms drift</button>
     <button id="downloadBtn" disabled>Download drift CSV</button>
     <button id="clearBtn" disabled>Clear log</button>
     <button id="sendBtn" disabled>Send test message</button>
 
-    <div style="margin-top: 10px;">
+    <div style="margin-top: 10px; display: flex; gap: 10px; align-items: flex-start;">
         <video id="video" muted playsinline preload="auto" style="width: 480px; display: block; background: #000;"></video>
+        <div id="remoteContainer" style="width: 240px; min-height: 180px; background: #111; padding: 4px; color: #aaa; font-size: 11px;">
+            <div>Remote participants: <span id="remoteCountText">0</span></div>
+        </div>
     </div>
 
     <div id="log"></div>
+
+    <script src="https://unpkg.com/livekit-client@2/dist/livekit-client.umd.js"></script>
 
     <script src="client.js"></script>
 </body>
