@@ -153,7 +153,7 @@ in commits, journal entries, and the technical report.
 |-----|------|--------|------------------|
 | RN4.1 | expo-video loads `/sample.mp4` from Node | ✓ | Nov 7 screenshots show park footage |
 | RN4.2 | Leader Play propagates to follower via DC 'play' | ✓ | Nov 7 — "Received play from leader" log |
-| RN4.3 | Snap seeks `player.currentTime` (visible jump) | ◆ | Logged "SNAP: seek to expected Nms"; visible verification pending |
+| RN4.3 | Snap seeks `player.currentTime` (visible jump) | ✓ | Nov 7 — visible frame jump on phone when +2000ms pressed |
 | RN4.4 | Ease sets `player.playbackRate` | ✓ | Logged "EASE enter: rate 1.02" |
 | RN4.5 | Video loops instead of ending | ✓ | `player.loop = true` set; no visible freeze |
 | RN4.6 | Snap seek recovery time on expo-video (vs browser's 660 ms) | ✗ | Not measured — codec-pipeline comparison pending |
@@ -162,9 +162,11 @@ in commits, journal entries, and the technical report.
 | RN4.9 | Remote video track subscribed | ✓ | Nov 7 — "subscribed to video from peer-B-..." log |
 | RN4.10 | Remote audio track subscribed | ✓ | Nov 7 — "subscribed to audio from peer-B-..." log |
 | RN4.11 | Audio ducking fires cross-channel on phone | ✓ | Nov 7 — "DUCK: remote speaking → video.volume 0.2" + release cycles |
-| RN4.12 | **Remote video ACTUALLY RENDERS in LKVideoView overlay** | ⧖ | Code added, awaiting visual confirmation |
+| RN4.12 | **Remote video ACTUALLY RENDERS in LKVideoView overlay** | ✓ | Nov 7 phone screenshot — laptop user's camera visible in top-right overlay |
 | RN4.13 | Audio ducking audible test (not just log) | ✗ | Needs headphones + deliberate speech |
-| RN4.14 | PiP overlay matches browser's look | ⧖ | 120×160 overlay in place, visual check pending |
+| RN4.14 | PiP overlay matches browser's look | ✓ | Nov 7 — 120×160 overlay with white border rendering correctly, mirrored across both platforms |
+| RN4.15 | Concurrent Phase 2 sync + Phase 3 LiveKit call without interference | ✓ | Nov 7 — Burst #133 cycling, drift 32ms, natural ease (-278ms) + exit all observed WHILE LiveKit room was active with camera + mic + remote video rendering |
+| RN4.16 | Natural ease under LiveKit load (cross-platform) | ✓ | Nov 7 — `EASE enter: drift -278ms → rate 1.02` + `EASE exit: drift 24ms < 30ms` observed on browser (role B) during active LiveKit call |
 
 ---
 
