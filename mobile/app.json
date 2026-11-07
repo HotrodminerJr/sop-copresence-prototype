@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "SOP Co-Presence",
+    "slug": "sop-prototype",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "SOP Co-Presence uses the camera for the live video call alongside the shared media.",
+        "NSMicrophoneUsageDescription": "SOP Co-Presence uses the microphone for the live voice call alongside the shared media."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ],
+      "package": "com.hotrodminersteam.sopprototype"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "@livekit/react-native-expo-plugin",
+      "expo-video"
+    ],
+    "extra": {
+      "signalingUrl": "ws://10.80.180.17:3000",
+      "signalingHttpUrl": "http://10.80.180.17:3000",
+      "eas": {
+        "projectId": "cbf92993-cbae-44f0-9cde-9f34c514569b"
+      }
+    },
+    "owner": "hotrodminers-team"
+  }
+}
