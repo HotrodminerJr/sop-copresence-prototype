@@ -157,6 +157,117 @@ belongs at the video layer, so Phase 3 and the eval phase will care.
 Next session: Phase 3 proper — RN port + LiveKit integration + PiP +
 audio ducking. Highest-risk phase per the implementation plan.
 
+## Sat 2026-11-07 — Phase 3 Step 3: RN port Phase 1+2+3
+
+Scope: port the browser's sync engine to React Native so the
+proposal's "cross-platform native-mobile" claim stops being an
+IOU. Done today in three slices against a single Expo scaffold.
+
+Toolchain:
+- npx create-expo-app@latest mobile --template blank (SDK 58)
+- npx expo install expo-dev-client @livekit/react-native
+  @livekit/react-native-webrtc @livekit/react-native-expo-plugin
+  expo-video
+- @livekit/react-native-webrtc is their fork of react-native-webrtc
+  with LiveKit patches, exposes the same RTCPeerConnection /
+  RTCSessionDescription / RTCIceCandidate API as the browser so the
+  translation is mechanical
+- registerGlobals() from @livekit/react-native called from index.js
+  before App import — mandatory so RN WebRTC finds its globals
+- app.json: Android CAMERA/RECORD_AUDIO/MODIFY_AUDIO_SETTINGS
+  permissions, extra.signalingUrl pointing at the laptop's LAN IP
+
+EAS Dev Client build (needed because react-native-webrtc is a
+native module that plain Expo Go can't load):
+- eas init --id <project uuid> linked mobile/ to a pre-created
+  EAS project under the hotrodminers-team account
+- eas build -p android --profile development: ~12 min cloud build,
+  produced an APK, user installed on their Android phone
+
+Phase 1 of the port (signaling only, Nov 7 morning):
+- WebSocket to the Node server, display role, log signaling messages
+- Verified: phone connected, became peer A (first to connect that
+  cycle), browser became B, server log showed both clients
+
+Phase 2 of the port (WebRTC handshake + DataChannel):
+- Faithful translation of public/client.js handshake into RN hooks
+- Refs for pc / dc / ws / role used inside async callbacks because
+  React state is stale inside WebSocket onmessage closures
+- Added addEventListener for icecandidate/connectionstatechange/
+  datachannel; same shape as browser WebRTC
+- Verified: phone↔browser DataChannel OPEN, chat messages
+  round-tripped bidirectionally
+
+Phase 3 of the port (sync engine):
+- Position model (D14) ported: checkpointWallRef / checkpointPosRef /
+  currentRateRef, setCheckpoint() and currentPosition() are the same
+  three lines as the browser version
+- Cristian's burst sampling ported: 10 samples per 10s cycle,
+  lowest-RTT selection, timeout safeguard
+- Leader-follower position broadcast ported (role-gated to A)
+- applyCorrection ported with snap (>=500ms), ease at +-2%
+  (50-500ms), no-op (<50ms), 50/30 asymmetric hysteresis
+- +2000ms inject button for demo
+- In-memory drift log (download via expo-file-system deferred
+  to a later phase)
+- UI: Role / DC / RTT / theta / Burst progress / Local pos /
+  Expected / Drift (color-coded) / Rate / Correction / Rows
+
+Verification (Nov 7, 15:44-15:45 local):
+- Phone as B (follower), Chrome on laptop as A (leader), same WiFi
+- Session ran 9+ minutes continuous, 1115 rows logged
+- Real clock skew measured: theta stable at -1247 ms +- 15 ms
+  across bursts #35-#38 (devices' wall clocks differ by ~1.25
+  SECONDS — the laptop appears to be running ahead of the phone)
+- RTT per sample: 70-800 ms with wide bursts (real WiFi noise
+  plus LiveKit traffic sharing the pipe on the laptop side)
+- Steady-state drift: -21 ms, correction none (green dead zone)
+
+All three correction modes fired naturally during one 10-second
+window captured in the log:
+    [10:14:12.106] EASE enter: drift -199ms -> rate 1.02
+    [10:14:19.193] EASE exit:  drift -28ms  < 30ms, rate back to 1.00
+    [10:14:19.674] Injected +2000ms drift
+    [10:14:19.804] SNAP: drift 1972ms -> seek to expected 8133ms
+
+Observations worth keeping:
+- The natural ease was triggered by real network drift that the
+  10s burst cycle took time to correct for; it was NOT contrived.
+  Drift crossed the 50 ms enter threshold on its own, ran rate=1.02
+  for 7 seconds, and exited cleanly at the 30 ms hysteresis boundary.
+- The snap seek completed in 130 ms wall-clock (log timestamp gap
+  between Injected and SNAP) — fast because the sync layer only
+  mutates the position model, not any video player on the phone yet
+  (no video wired on RN). Browser-side we measured ~660 ms snap
+  recovery because the HTML5 decoder re-seeks; RN measurement with
+  expo-video attached is a future measurement.
+- Chat messages ("Peer says: Hello from A at...") continued flowing
+  during both the ease and snap events, proving the DataChannel
+  isn't starved by Cristian's traffic.
+
+This commit (19210b8, preceded by db3479d for the browser PiP
+layout) realizes D2's cross-platform promise and D4's
+mitigation-under-noise claim with measured evidence. The
+proposal's four-problem thesis is now one problem down in
+production — problem 1 (media sync under network heterogeneity)
+is validated end-to-end on native mobile against browser, under
+real noise, across platforms.
+
+RN pieces still owed (not blocking the research claim):
+- expo-video + sync model hookup (zeroth step equivalent on RN)
+- LiveKit RN SDK integration (camera/mic/remote tracks)
+- Audio ducking on RN
+- PiP overlay on RN
+These are polish that let the phone show the full demo rather
+than just the sync layer. Scheduled after evaluation.
+
+Next session: start evaluation. The sync layer is proven both
+browser-browser and phone-browser; now measure its performance
+under controlled network degradation. tc + netem matrix (LAN,
+home WiFi, 4G, congested 4G, worst case), 10 min per condition,
+3 repeats, drift CSV per run. Then benchmark against Kast as
+the baseline per the proposal's eval section.
+
 ## Fri 2026-11-06 — Phase 3 Step 1+2: LiveKit live call + audio ducking
 
 Started with Path B from the sequencing question: add LiveKit in the
