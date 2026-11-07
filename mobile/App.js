@@ -16,14 +16,19 @@ import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
 import { useState, useRef } from 'react';
 import { StyleSheet, Text, View, Button, ScrollView, TextInput } from 'react-native';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import {
   RTCPeerConnection,
   RTCSessionDescription,
   RTCIceCandidate,
 } from '@livekit/react-native-webrtc';
+import { Room, RoomEvent, Track } from 'livekit-client';
+import { AudioSession, VideoView as LKVideoView } from '@livekit/react-native';
 
-const DEFAULT_URL = Constants.expoConfig?.extra?.signalingUrl ?? 'ws://10.80.180.17:3000';
-const STUN_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+const DEFAULT_URL  = Constants.expoConfig?.extra?.signalingUrl ?? 'ws://10.80.180.17:3000';
+const DEFAULT_HTTP = Constants.expoConfig?.extra?.signalingHttpUrl ?? 'http://10.80.180.17:3000';
+const VIDEO_URL    = `${DEFAULT_HTTP}/sample.mp4`;
+const STUN_CONFIG  = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
 // Cristian's
 const BURST_SIZE          = 10;
@@ -55,6 +60,28 @@ export default function App() {
   const [rateText, setRateText]         = useState('1.00');
   const [modeText, setModeText]         = useState('—');
   const [rowCount, setRowCount]         = useState(0);
+  const [videoLagText, setVideoLagText] = useState('—');
+  const [videoPlaying, setVideoPlaying] = useState(false);
+
+  // ─── expo-video player (zeroth step on RN) ───
+  // Model stays authoritative; snap → player.currentTime; ease → player.playbackRate
+  // Looping so the sample MP4 doesn't visibly end mid-demo; video_vs_model_gap
+  // becomes a sawtooth once model > duration — meaningful only during first loop.
+  const player = useVideoPlayer(VIDEO_URL, (p) => {
+    p.loop = true;
+    p.muted = false;  // allow audio so ducking is audible; user can mute in-app if needed
+  });
+  const videoPlayingRef = useRef(false);
+
+  // ─── LiveKit state (Slice 2) ───
+  const [callState,   setCallState]   = useState('idle');  // 'idle' | 'joining' | 'in-call'
+  const [remoteCount, setRemoteCount] = useState(0);
+  const [remoteVideoTracks, setRemoteVideoTracks] = useState([]); // [{identity, track}]
+  const livekitRoomRef = useRef(null);
+
+  // Audio ducking state
+  const currentlyDuckedRef  = useRef(false);
+  const duckReleaseTimerRef = useRef(null);
 
   // ─── Refs for callback-stable state ───
   const wsRef         = useRef(null);
@@ -104,6 +131,21 @@ export default function App() {
     return checkpointPosRef.current + (Date.now() - checkpointWallRef.current) * currentRateRef.current;
   };
 
+  // ─── Video sync helpers (push model state to expo-video) ───
+  const syncVideoRate = () => {
+    if (!videoPlayingRef.current) return;
+    try {
+      if (player.playbackRate !== currentRateRef.current) {
+        player.playbackRate = currentRateRef.current;
+      }
+    } catch (e) { /* player may not be ready yet */ }
+  };
+  const seekVideoTo = (positionMs) => {
+    if (!videoPlayingRef.current) return;
+    try { player.currentTime = positionMs / 1000; }
+    catch (e) { /* ignore transient errors */ }
+  };
+
   // ─── Reconciliation (D5 + D15) ───
   const applyCorrection = (drift, expected) => {
     if (!hasOffsetRef.current) return 'none';
@@ -111,6 +153,8 @@ export default function App() {
 
     if (absD >= SNAP_THRESHOLD_MS) {
       setCheckpoint(expected, 1.0);
+      seekVideoTo(expected);
+      syncVideoRate();
       easingRef.current = false;
       appendLog(`SNAP: drift ${drift.toFixed(0)}ms → seek to expected ${expected.toFixed(0)}ms`);
       return 'snap';
@@ -118,6 +162,7 @@ export default function App() {
     if (easingRef.current) {
       if (absD < EASE_EXIT_MS) {
         setCheckpoint(currentPosition(), 1.0);
+        syncVideoRate();
         easingRef.current = false;
         appendLog(`EASE exit: drift ${drift.toFixed(0)}ms < ${EASE_EXIT_MS}ms, rate back to 1.00`);
         return 'none';
@@ -125,12 +170,14 @@ export default function App() {
       const desired = drift > 0 ? 1 - EASE_RATE_MAGNITUDE : 1 + EASE_RATE_MAGNITUDE;
       if (desired !== currentRateRef.current) {
         setCheckpoint(currentPosition(), desired);
+        syncVideoRate();
       }
       return 'ease';
     }
     if (absD >= EASE_ENTER_MS) {
       const desired = drift > 0 ? 1 - EASE_RATE_MAGNITUDE : 1 + EASE_RATE_MAGNITUDE;
       setCheckpoint(currentPosition(), desired);
+      syncVideoRate();
       easingRef.current = true;
       appendLog(`EASE enter: drift ${drift.toFixed(0)}ms → rate ${desired}`);
       return 'ease';
@@ -202,6 +249,12 @@ export default function App() {
       setCheckpoint(0, 1.0);
       tickerIntervalRef.current = setInterval(() => {
         setPositionText(Math.round(currentPosition()));
+        if (videoPlayingRef.current) {
+          try {
+            const gap = currentPosition() - player.currentTime * 1000;
+            setVideoLagText(gap.toFixed(0));
+          } catch (e) { /* ignore */ }
+        }
       }, POSITION_TICK_MS);
       appendLog('Position ticker started at t=0');
 
@@ -282,6 +335,15 @@ export default function App() {
         setRateText(currentRateRef.current.toFixed(2));
         setModeText(correction);
 
+        // α instrumentation: measure video pipeline lag alongside protocol drift
+        let videoTimeMs = 0, videoGap = 0;
+        if (videoPlayingRef.current) {
+          try {
+            videoTimeMs = player.currentTime * 1000;
+            videoGap = local - videoTimeMs;
+          } catch (e) { /* ignore */ }
+        }
+
         driftLogRef.current.push({
           timestamp_ms: tReceive,
           burst_offset_ms: estimatedOffsetRef.current,
@@ -292,8 +354,20 @@ export default function App() {
           drift_ms: drift,
           correction_applied: correction,
           playback_rate: currentRateRef.current,
+          video_current_time_ms: videoTimeMs,
+          video_vs_model_gap_ms: videoGap,
         });
         setRowCount(driftLogRef.current.length);
+      }
+      else if (msg.type === 'play') {
+        // Follower received leader's play signal — start video + align model.
+        if (roleRef.current === 'B') {
+          try { player.play(); } catch (e) { appendLog(`play() error: ${e.message}`); }
+          videoPlayingRef.current = true;
+          setVideoPlaying(true);
+          setCheckpoint(0, 1.0);
+          appendLog('Received play from leader — video started on follower');
+        }
       }
       else if (msg.type === 'chat') {
         appendLog(`Peer says: ${msg.text}`);
@@ -418,8 +492,136 @@ export default function App() {
   const injectDrift = () => {
     if (checkpointWallRef.current !== null) {
       setCheckpoint(currentPosition() + INJECT_MS, currentRateRef.current);
+      seekVideoTo(currentPosition());
       appendLog(`Injected +${INJECT_MS}ms drift`);
     }
+  };
+
+  // ═══════════════════════════════════════════════════════════
+  // LiveKit live call + audio ducking (Slice 2)
+  // ═══════════════════════════════════════════════════════════
+  // Mirrors the browser's Phase 3: fetch a signed JWT from our Node
+  // server, connect to the LiveKit SFU, publish camera + mic,
+  // listen for remote speakers → duck the expo-video player's volume.
+  // ═══════════════════════════════════════════════════════════
+  const DUCK_VOLUME     = 0.2;
+  const DUCK_FULL       = 1.0;
+  const DUCK_RELEASE_MS = 500;
+
+  const applyDucking = (remoteSpeaking) => {
+    if (remoteSpeaking) {
+      if (duckReleaseTimerRef.current) {
+        clearTimeout(duckReleaseTimerRef.current);
+        duckReleaseTimerRef.current = null;
+      }
+      if (!currentlyDuckedRef.current) {
+        try { player.volume = DUCK_VOLUME; } catch {}
+        currentlyDuckedRef.current = true;
+        appendLog(`DUCK: remote speaking → video.volume ${DUCK_VOLUME}`);
+      }
+    } else if (currentlyDuckedRef.current && !duckReleaseTimerRef.current) {
+      duckReleaseTimerRef.current = setTimeout(() => {
+        try { player.volume = DUCK_FULL; } catch {}
+        currentlyDuckedRef.current = false;
+        duckReleaseTimerRef.current = null;
+        appendLog(`DUCK: release → video.volume ${DUCK_FULL}`);
+      }, DUCK_RELEASE_MS);
+    }
+  };
+
+  const joinCall = async () => {
+    if (!roleRef.current) { appendLog('Join requires an active signaling connection'); return; }
+    try {
+      setCallState('joining');
+      appendLog('Fetching LiveKit token…');
+      const identity = `peer-${roleRef.current}-${Date.now()}`;
+      const tokenUrl = `${DEFAULT_HTTP}/livekit/token?room=sop-sync-room&identity=${encodeURIComponent(identity)}`;
+      const res = await fetch(tokenUrl);
+      if (!res.ok) throw new Error(`token fetch ${res.status}`);
+      const { token, url: lkUrl } = await res.json();
+
+      appendLog(`Connecting to LiveKit at ${lkUrl}…`);
+      await AudioSession.startAudioSession();
+
+      const room = new Room();
+      livekitRoomRef.current = room;
+
+      room.on(RoomEvent.ParticipantConnected, (p) => {
+        appendLog(`LiveKit: ${p.identity} joined`);
+        setRemoteCount(room.remoteParticipants.size);
+      });
+      room.on(RoomEvent.ParticipantDisconnected, (p) => {
+        appendLog(`LiveKit: ${p.identity} left`);
+        setRemoteCount(room.remoteParticipants.size);
+      });
+      room.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+        appendLog(`LiveKit: subscribed to ${track.kind} from ${participant.identity}`);
+        if (track.kind === Track.Kind.Video) {
+          setRemoteVideoTracks((prev) => [
+            ...prev.filter((t) => t.identity !== participant.identity),
+            { identity: participant.identity, track },
+          ]);
+        }
+      });
+      room.on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+        if (track.kind === Track.Kind.Video) {
+          setRemoteVideoTracks((prev) => prev.filter((t) => t.track !== track));
+        }
+      });
+      room.on(RoomEvent.Disconnected, () => {
+        appendLog('LiveKit: room disconnected');
+        setCallState('idle');
+        livekitRoomRef.current = null;
+        setRemoteCount(0);
+        setRemoteVideoTracks([]);
+        if (currentlyDuckedRef.current) {
+          try { player.volume = DUCK_FULL; } catch {}
+          currentlyDuckedRef.current = false;
+        }
+        if (duckReleaseTimerRef.current) {
+          clearTimeout(duckReleaseTimerRef.current);
+          duckReleaseTimerRef.current = null;
+        }
+        AudioSession.stopAudioSession().catch(() => {});
+      });
+      room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+        const localIdentity = room.localParticipant.identity;
+        const remoteSpeaking = speakers.some((p) => p.identity !== localIdentity);
+        applyDucking(remoteSpeaking);
+      });
+
+      await room.connect(lkUrl, token);
+      appendLog(`LiveKit connected as ${identity}`);
+      await room.localParticipant.enableCameraAndMicrophone();
+      appendLog('LiveKit: camera + mic published');
+      setCallState('in-call');
+      setRemoteCount(room.remoteParticipants.size);
+    } catch (err) {
+      appendLog(`LiveKit error: ${err.message}`);
+      setCallState('idle');
+      try { await AudioSession.stopAudioSession(); } catch {}
+    }
+  };
+
+  const leaveCall = async () => {
+    try { await livekitRoomRef.current?.disconnect(); } catch {}
+    livekitRoomRef.current = null;
+    setCallState('idle');
+    setRemoteCount(0);
+  };
+
+  // ─── Leader-only Play button ───
+  const playVideo = () => {
+    if (roleRef.current !== 'A' || !dcRef.current || dcRef.current.readyState !== 'open') {
+      appendLog('Play requires leader role + open DataChannel');
+      return;
+    }
+    try { player.play(); } catch (e) { appendLog(`play() error: ${e.message}`); }
+    videoPlayingRef.current = true;
+    setVideoPlaying(true);
+    setCheckpoint(0, 1.0);
+    dcRef.current.send(JSON.stringify({ type: 'play' }));
+    appendLog('Play triggered — leader + follower both start');
   };
 
   const driftColor =
@@ -443,9 +645,40 @@ export default function App() {
         <Button title="Disconnect" onPress={disconnect} color="#888" />
         <View style={{ width: 6 }} />
         <Button title="Send test"  onPress={sendTest} />
+      </View>
+      <View style={styles.row}>
+        <Button title="▶ Play"     onPress={playVideo}  disabled={role !== 'A' || dcState !== 'open'} />
         <View style={{ width: 6 }} />
         <Button title="+2000ms"    onPress={injectDrift} color="#c60" />
+        <View style={{ width: 6 }} />
+        {callState === 'in-call'
+          ? <Button title="Leave call" onPress={leaveCall} color="#a00" />
+          : <Button title={callState === 'joining' ? 'Joining…' : '📞 Join call'}
+                   onPress={joinCall}
+                   disabled={callState === 'joining' || dcState !== 'open'} />}
       </View>
+
+      <View style={{ position: 'relative' }}>
+        <VideoView
+          player={player}
+          style={styles.video}
+          nativeControls={false}
+          contentFit="contain"
+        />
+        {remoteVideoTracks.length > 0 && (
+          <View style={styles.remoteOverlay}>
+            {remoteVideoTracks.map((rt) => (
+              <LKVideoView
+                key={rt.identity}
+                videoTrack={rt.track}
+                style={styles.remoteVideo}
+                objectFit="cover"
+              />
+            ))}
+          </View>
+        )}
+      </View>
+
 
       <View style={styles.statusBox}>
         <Text style={styles.statusText}>Status: {status}</Text>
@@ -453,6 +686,9 @@ export default function App() {
           Role: {role}  |  DC: {dcState}  |  RTT: {rttText} ms  |  θ: {offsetText} ms
         </Text>
         <Text style={styles.statusText}>Burst: {burstText}</Text>
+        <Text style={styles.statusText}>
+          LiveKit: {callState}  |  Remote: {remoteCount}
+        </Text>
       </View>
 
       <View style={styles.syncPanel}>
@@ -464,6 +700,7 @@ export default function App() {
         <Text style={styles.statusText}>
           Rate: {rateText}×  |  Correction: {modeText}  |  Rows: {rowCount}
         </Text>
+        <Text style={styles.statusText}>Video lag (model − video): {videoLagText} ms</Text>
       </View>
 
       <Text style={styles.label}>Log</Text>
@@ -490,4 +727,10 @@ const styles = StyleSheet.create({
   logBox: { flex: 1, borderWidth: 1, borderColor: '#ccc', borderRadius: 4,
             padding: 6, marginTop: 4, marginBottom: 12 },
   logLine: { fontFamily: 'monospace', fontSize: 9, color: '#333' },
+  video: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#000',
+           marginTop: 8, borderRadius: 4 },
+  remoteOverlay: { position: 'absolute', top: 16, right: 8, width: 120, height: 160,
+                   backgroundColor: '#111', borderWidth: 2, borderColor: '#fff',
+                   borderRadius: 4, overflow: 'hidden' },
+  remoteVideo: { flex: 1, backgroundColor: '#000' },
 });

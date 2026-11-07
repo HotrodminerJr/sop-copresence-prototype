@@ -37,8 +37,8 @@
       "expo-video"
     ],
     "extra": {
-      "signalingUrl": "ws://10.80.180.17:3000",
-      "signalingHttpUrl": "http://10.80.180.17:3000",
+      "signalingUrl": "ws://10.54.133.17:3000",
+      "signalingHttpUrl": "http://10.54.133.17:3000",
       "eas": {
         "projectId": "cbf92993-cbae-44f0-9cde-9f34c514569b"
       }
