@@ -36,10 +36,13 @@
     <button id="clearBtn" disabled>Clear log</button>
     <button id="sendBtn" disabled>Send test message</button>
 
-    <div style="margin-top: 10px; display: flex; gap: 10px; align-items: flex-start;">
-        <video id="video" muted playsinline preload="auto" style="width: 480px; display: block; background: #000;"></video>
-        <div id="remoteContainer" style="width: 240px; min-height: 180px; background: #111; padding: 4px; color: #aaa; font-size: 11px;">
-            <div>Remote participants: <span id="remoteCountText">0</span></div>
+    <!-- PiP layout: shared video takes the frame, remote camera overlays
+         top-right. Matches the SharePlay / watch-together UX pattern that
+         Phase 3 is testing, and ports cleanly to RN with a styled View. -->
+    <div style="margin-top: 10px; position: relative; display: inline-block;">
+        <video id="video" muted playsinline preload="auto" style="width: 640px; display: block; background: #000;"></video>
+        <div id="remoteContainer" style="position: absolute; top: 12px; right: 12px; width: 200px; min-height: 150px; background: #111; color: #ccc; font-size: 10px; padding: 2px 4px; border: 2px solid #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.45); z-index: 10; overflow: hidden;">
+            <div style="position: absolute; top: 2px; left: 4px; z-index: 11; background: rgba(0,0,0,0.5); padding: 1px 4px; border-radius: 2px;">Remote: <span id="remoteCountText">0</span></div>
         </div>
     </div>
 
