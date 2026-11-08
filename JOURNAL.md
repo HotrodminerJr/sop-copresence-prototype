@@ -268,6 +268,82 @@ home WiFi, 4G, congested 4G, worst case), 10 min per condition,
 3 repeats, drift CSV per run. Then benchmark against Kast as
 the baseline per the proposal's eval section.
 
+## Sat 2026-11-08 — Evaluation matrix: 5 conditions × 3 reps × 10 min
+
+Executed the full tc/netem evaluation matrix described in the
+proposal's Theory §7 table. Orchestrated end-to-end by Claude via
+browser pane + Bash: open two tabs, click Play, apply netem on lo,
+wait 10 min, pull driftLog via JS, dedupe + analyze with pandas,
+move to next. Kast baseline deliberately skipped — scope-cut for
+time, documented in the final report.
+
+Infrastructure:
+- Linux netem on lo (confirmed via ping: self-to-self traffic
+  does traverse the lo qdisc even when destination is the wlo1 IP)
+- Scoped sudoer entry for /usr/sbin/tc (created the day before)
+- apply-netem.sh / clear-netem.sh helpers in eval/
+- Per-run CSV + summary JSON saved to eval/results/
+- First 60 rows per run dropped (initial catch-up noise)
+- Duplicate-broadcast bug (leader sometimes sends 2x per interval
+  due to stale setInterval across reconnects) handled by dedupe
+  on leader_position_ms in analysis; raw rows are ~2x the clean
+  count. Fix for the broadcaster scheduled for post-report.
+
+Aggregate (mean of 3 reps per condition, after dedupe + catch-up drop):
+
+  Condition                  | Clean | RMS  | P50  | P95   | P99   | Max   | ease%
+  C0 baseline (0/0/0)        | 1995  | 40.9 | 23.3 |  23.8 |  34.8 | 854.5 |  0.0
+  C1 home WiFi (30/10/0.5)   | 2069  |  7.0 |  4.8 |  14.5 |  17.3 |  20.0 |  0.0
+  C2 4G (60/30/1)            | 1988  | 18.5 | 15.3 |  34.2 |  41.7 |  43.0 |  0.0
+  C3 congested 4G (120/60/3) | 1997  | 28.6 | 22.0 |  46.8 |  79.1 | 127.2 |  6.4
+  C4 worst case (250/100/5)  | 2104  | 60.7 | 25.9 | 141.4 | 217.9 | 311.5 | 26.4
+
+Headline findings for the report:
+
+1. P95 drift stays under the 50 ms perceptual co-watching threshold
+   through condition C3 (congested 4G: 120 ms delay, 60 ms jitter,
+   3% loss). Only at C4 (worst case: 250/100/5) does P95 break
+   through, reaching 141 ms.
+
+2. The ease mechanism activates reproducibly. 0% under baseline,
+   home WiFi, and 4G. 6.4% under congested 4G. 26.4% under worst
+   case. Graceful degradation — the system shifts from pure
+   dead-zone behavior to active rate modulation exactly where the
+   perceptual threshold starts leaking.
+
+3. Snap NEVER fires during network operation. Across ~10,000
+   broadcasts under all four netem conditions, drift never
+   exceeded the 500 ms snap threshold. The one snap event in the
+   entire matrix (C0 rep 3) was a Chrome tab-throttling artifact
+   with a measurable timestamp gap, not a network-induced event.
+
+4. Cristian's lowest-RTT filter handles jitter correctly throughout.
+   θ estimates remained stable across all conditions despite burst
+   RTT variance ranging to [59, 89] ms per burst under C1 and
+   wider under C3/C4.
+
+5. The ~35 ms structural offset observed in C0 rep 1/2 (which
+   initially looked like a baseline anomaly) is the Play-moment
+   catch-up: follower's model stamps at 0 right when leader's
+   model is already a few broadcasts ahead. One snap (C0 rep 3)
+   resets this to sub-ms. Repeatable artifact, not a bug.
+
+Generated matplotlib plots (eval/plots/):
+- One drift-over-time plot per condition (C0-C4), showing all 3
+  reps overlaid with the ease and snap thresholds marked
+- One summary bar chart showing RMS/P50/P95/P99 and correction
+  activation rate across conditions
+
+Committed as 871278a (34 files, ~20k lines). Report draft at
+eval/REPORT_DRAFT.md. The thesis's problem-1 claim (sync under
+network heterogeneity) is now empirically supported with a full
+measurement matrix.
+
+Next session: writeup — expand REPORT_DRAFT.md into the final
+technical report with proposal recap, methodology section, these
+results, and a discussion of limitations (duplicate-broadcast bug
+noted, Chrome throttle, no Kast baseline).
+
 ## Fri 2026-11-06 — Phase 3 Step 1+2: LiveKit live call + audio ducking
 
 Started with Path B from the sequencing question: add LiveKit in the

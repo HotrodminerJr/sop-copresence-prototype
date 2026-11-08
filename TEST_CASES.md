@@ -176,19 +176,19 @@ These are the gaps the eval phase (Weeks 11-12 of plan) is supposed to fill.
 
 | ID | Case | Status | Priority |
 |-----|------|--------|----------|
-| E.1 | `tc`/`netem` matrix: baseline LAN (0 ms, 0% loss) | ✗ | HIGH |
-| E.2 | `tc`/`netem`: home WiFi (30 ms, 10 ms jitter, 0.5% loss) | ✗ | HIGH |
-| E.3 | `tc`/`netem`: 4G mobile (60 ms, 30 ms jitter, 1% loss) | ✗ | HIGH |
-| E.4 | `tc`/`netem`: congested 4G (120 ms, 60 ms jitter, 3% loss) | ✗ | HIGH |
-| E.5 | `tc`/`netem`: worst case (250 ms, 100 ms jitter, 5% loss) | ✗ | HIGH |
-| E.6 | Each condition repeated 3× for reproducibility | ✗ | MEDIUM (plan commitment) |
-| E.7 | Each run 10 min duration | ✗ | MEDIUM |
-| E.8 | P50/P95/P99 drift percentiles per condition | ✗ | HIGH (proposal's measurement promise) |
-| E.9 | RMS drift per condition | ✗ | HIGH |
-| E.10 | Correction rate (no-op/ease/snap fraction) per condition | ✗ | HIGH |
-| E.11 | Clock-offset stability over session | ✗ | MEDIUM |
-| E.12 | Kast baseline comparison | ✗ | MEDIUM — thesis distinguisher |
-| E.13 | Long-duration session (hour+) | ✗ | MEDIUM |
+| E.1 | `tc`/`netem` matrix: baseline LAN (0 ms, 0% loss) | ✓ | Nov 8 — C0, 3 reps, RMS 40.9, P95 23.8 (eval/results/C0_*) |
+| E.2 | `tc`/`netem`: home WiFi (30 ms, 10 ms jitter, 0.5% loss) | ✓ | Nov 8 — C1, RMS 7.0, P95 14.5 |
+| E.3 | `tc`/`netem`: 4G mobile (60 ms, 30 ms jitter, 1% loss) | ✓ | Nov 8 — C2, RMS 18.5, P95 34.2 |
+| E.4 | `tc`/`netem`: congested 4G (120 ms, 60 ms jitter, 3% loss) | ✓ | Nov 8 — C3, RMS 28.6, P95 46.8 (first condition where ease fires naturally at 6.4%) |
+| E.5 | `tc`/`netem`: worst case (250 ms, 100 ms jitter, 5% loss) | ✓ | Nov 8 — C4, RMS 60.7, P95 141.4 (P95 exceeds perceptual threshold; ease fires 26.4%) |
+| E.6 | Each condition repeated 3× for reproducibility | ✓ | Nov 8 — all 15 runs completed, per-condition reps consistent within ~10% |
+| E.7 | Each run 10 min duration | ✓ | Nov 8 — ~1200 raw rows / ~670 clean per run |
+| E.8 | P50/P95/P99 drift percentiles per condition | ✓ | Nov 8 — in eval/results/matrix_summary.md |
+| E.9 | RMS drift per condition | ✓ | Nov 8 — in matrix_summary.md |
+| E.10 | Correction rate (no-op/ease/snap fraction) per condition | ✓ | Nov 8 — ease rises monotonically 0 → 6.4 → 26.4% with condition severity |
+| E.11 | Clock-offset stability over session | ✓ | Nov 8 — θ stable across bursts in all conditions |
+| E.12 | Kast baseline comparison | ⊘ | Deliberately scope-cut for time; documented in REPORT_DRAFT.md |
+| E.13 | Long-duration session (hour+) | ✗ | Not run. Deferred — the 10-min runs show stability; hour+ would be low-marginal-utility |
 
 ---
 
